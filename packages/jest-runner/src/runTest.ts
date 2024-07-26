@@ -183,7 +183,7 @@ async function runTestInternal(
     ? new LeakDetector(environment)
     : null;
 
-  setGlobal(environment.global, 'console', testConsole);
+  setGlobal(environment.global, 'console', testConsole, false);
 
   const runtime = new Runtime(
     projectConfig,
@@ -312,8 +312,12 @@ async function runTestInternal(
         sendMessageToJest,
       );
     } catch (error: any) {
-      // Access stack before uninstalling sourcemaps
-      error.stack;
+      // Access all stacks before uninstalling sourcemaps
+      let e = error;
+      while (typeof e === 'object' && 'stack' in e) {
+        e.stack;
+        e = e?.cause ?? {};
+      }
 
       throw error;
     } finally {

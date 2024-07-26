@@ -14,7 +14,12 @@ import type {
 import {LegacyFakeTimers, ModernFakeTimers} from '@jest/fake-timers';
 import type {Global} from '@jest/types';
 import {ModuleMocker} from 'jest-mock';
-import {installCommonGlobals} from 'jest-util';
+import {
+  installCommonGlobals,
+  isShreddable,
+  setNotShreddable,
+  shred,
+} from 'jest-util';
 
 type Timer = {
   id: number;
@@ -80,12 +85,13 @@ export default class NodeEnvironment implements JestEnvironment<Timer> {
   moduleMocker: ModuleMocker | null;
   customExportConditions = ['node', 'node-addons'];
   private readonly _configuredExportConditions?: Array<string>;
+  private _globalProxy: GlobalProxy;
 
   // while `context` is unused, it should always be passed
   constructor(config: JestEnvironmentConfig, _context: EnvironmentContext) {
     const {projectConfig} = config;
-    this.context = createContext();
-
+    this._globalProxy = new GlobalProxy();
+    this.context = createContext(this._globalProxy.proxy());
     const global = runInContext(
       'this',
       Object.assign(this.context, projectConfig.testEnvironmentOptions),
@@ -194,6 +200,8 @@ export default class NodeEnvironment implements JestEnvironment<Timer> {
       config: projectConfig,
       global,
     });
+
+    this._globalProxy.lock();
   }
 
   // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -206,9 +214,32 @@ export default class NodeEnvironment implements JestEnvironment<Timer> {
     if (this.fakeTimersModern) {
       this.fakeTimersModern.dispose();
     }
-    this.context = null;
+
+    if (this.context) {
+      // source-map-support keeps memory leftovers in `Error.prepareStackTrace`
+      runInContext(
+        "Error.prepareStackTrace = () => { return ''; }",
+        this.context,
+      );
+
+      // remove any leftover listeners that may hold references to sizable memory
+      this.context.process.removeAllListeners();
+      const cluster = runInContext(
+        "require('node:cluster')",
+        Object.assign(this.context, {
+          require:
+            // get native require instead of webpack's
+            // @ts-expect-error https://webpack.js.org/api/module-variables/#__non_webpack_require__-webpack-specific
+            __non_webpack_require__,
+        }),
+      );
+      cluster.removeAllListeners();
+
+      this.context = null;
+    }
     this.fakeTimers = null;
     this.fakeTimersModern = null;
+    this._globalProxy.clear();
   }
 
   exportConditions(): Array<string> {
@@ -221,3 +252,117 @@ export default class NodeEnvironment implements JestEnvironment<Timer> {
 }
 
 export const TestEnvironment = NodeEnvironment;
+
+// TODO no need for wrapper
+class ValueWrapper<T> {
+  constructor(
+    readonly property: string | symbol,
+    readonly value: T,
+  ) {}
+
+  shred(): void {
+    // hack due to react-native accessing their custom global 'performance' after teardown
+    if (this.property !== 'performance') {
+      shred(this.value);
+    }
+  }
+}
+
+class GlobalProxy implements ProxyHandler<typeof globalThis> {
+  private globalCopy: typeof globalThis = Object.create(
+    Object.getPrototypeOf(globalThis),
+  );
+  private globalProxy: typeof globalThis = new Proxy(this.globalCopy, this);
+  // TODO rename
+  private isBasic = true;
+  private propertyToWrapper = new Map<string | symbol, ValueWrapper<unknown>>();
+  // TODO delete comment
+  // TODO rename
+  // private propertyToBasic = new Map<string | symbol, unknown>();
+  private leftOvers: Array<ValueWrapper<unknown>> = [];
+
+  constructor() {
+    this.register = this.register.bind(this);
+  }
+
+  proxy(): typeof globalThis {
+    return this.globalProxy;
+  }
+
+  lock(): void {
+    this.isBasic = false;
+  }
+
+  clear(): void {
+    for (const wrapper of [
+      ...this.propertyToWrapper.values(),
+      ...this.leftOvers,
+    ]) {
+      // TODO delete comment
+      // if (wrapper.value !== this.propertyToBasic.get(wrapper.property)) {
+      wrapper.shred();
+      // }
+    }
+    this.propertyToWrapper.clear();
+    // TODO delete comment
+    // this.propertyToBasic.clear();
+    this.leftOvers = [];
+    this.globalCopy = {} as typeof globalThis;
+  }
+
+  defineProperty(
+    target: typeof globalThis,
+    property: string | symbol,
+    attributes: PropertyDescriptor,
+  ): boolean {
+    const newAttributes = {...attributes};
+
+    if ('set' in newAttributes && newAttributes.set !== undefined) {
+      const originalSet = newAttributes.set;
+      const register = this.register;
+      newAttributes.set = value => {
+        originalSet(value);
+        const newValue = Reflect.get(target, property);
+        register(property, newValue);
+      };
+    }
+
+    const result = Reflect.defineProperty(target, property, newAttributes);
+
+    if ('value' in newAttributes) {
+      this.register(property, newAttributes.value);
+    }
+
+    return result;
+  }
+
+  deleteProperty(
+    target: typeof globalThis,
+    property: string | symbol,
+  ): boolean {
+    const result = Reflect.deleteProperty(target, property);
+    const wrapper = this.propertyToWrapper.get(property);
+    if (wrapper) {
+      this.leftOvers.push(wrapper);
+      this.propertyToWrapper.delete(property);
+    }
+    return result;
+  }
+
+  private register(property: string | symbol, value: unknown) {
+    const currentWrapper = this.propertyToWrapper.get(property);
+    if (value !== currentWrapper?.value) {
+      if (this.isBasic && isShreddable(value)) {
+        setNotShreddable(value);
+        // TODO delete comment
+        // this.propertyToBasic.set(property, value);
+      }
+      if (currentWrapper) {
+        this.leftOvers.push(currentWrapper);
+      }
+
+      const wrapper = new ValueWrapper(property, value);
+      this.propertyToWrapper.set(property, wrapper);
+    }
+  }
+}
