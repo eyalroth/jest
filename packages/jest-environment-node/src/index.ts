@@ -214,7 +214,23 @@ export default class NodeEnvironment implements JestEnvironment<Timer> {
     if (this.fakeTimersModern) {
       this.fakeTimersModern.dispose();
     }
-    this.context = null;
+
+    if (this.context) {
+      // remove any leftover listeners that may hold references to sizable memory
+      this.context.process.removeAllListeners();
+      const cluster = runInContext(
+        "require('node:cluster')",
+        Object.assign(this.context, {
+          require:
+            // get native require instead of webpack's
+            // @ts-expect-error https://webpack.js.org/api/module-variables/#__non_webpack_require__-webpack-specific
+            __non_webpack_require__,
+        }),
+      );
+      cluster.removeAllListeners();
+
+      this.context = null;
+    }
     this.fakeTimers = null;
     this.fakeTimersModern = null;
     this._globalProxy.clear();
