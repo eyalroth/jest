@@ -256,6 +256,7 @@ export const RawInitialOptions = Type.Partial(
     json: Type.Boolean(),
     globals: Type.Record(Type.String(), Type.Unknown()),
     globalSetup: Type.Union([Type.String(), Type.Null()]),
+    globalHooksPerWorker: Type.Union([Type.Boolean(), Type.Null()]),
     globalTeardown: Type.Union([Type.String(), Type.Null()]),
     haste: RawHasteConfig,
     id: Type.String(),

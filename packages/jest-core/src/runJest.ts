@@ -33,7 +33,6 @@ import collectNodeHandles, {
   type HandleCollectionResult,
 } from './collectHandles';
 import getNoTestsFoundMessage from './getNoTestsFoundMessage';
-import runGlobalHook from './runGlobalHook';
 import type {Filter, TestRunData} from './types';
 
 const getTestPaths = async (
@@ -279,12 +278,6 @@ export default async function runJest({
     collectHandles = collectNodeHandles();
   }
 
-  if (hasTests) {
-    performance.mark('jest/globalSetup:start');
-    await runGlobalHook({allTests, globalConfig, moduleName: 'globalSetup'});
-    performance.mark('jest/globalSetup:end');
-  }
-
   if (changedFilesPromise) {
     const changedFilesInfo = await changedFilesPromise;
     if (changedFilesInfo.changedFiles) {
@@ -319,12 +312,6 @@ export default async function runJest({
   performance.mark('jest/cacheResults:start');
   sequencer.cacheResults(allTests, results);
   performance.mark('jest/cacheResults:end');
-
-  if (hasTests) {
-    performance.mark('jest/globalTeardown:start');
-    await runGlobalHook({allTests, globalConfig, moduleName: 'globalTeardown'});
-    performance.mark('jest/globalTeardown:end');
-  }
 
   performance.mark('jest/processResults:start');
   await processResults(results, {

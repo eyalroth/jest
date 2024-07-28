@@ -20,6 +20,7 @@ import Runtime from 'jest-runtime';
 import {messageParent} from 'jest-worker';
 import runTest from './runTest';
 import type {ErrorWithCode, TestRunnerSerializedContext} from './types';
+import runGlobalHooks from "./runGlobalHooks";
 
 export type SerializableResolver = {
   config: Config.ProjectConfig;
@@ -113,4 +114,13 @@ export async function worker({
   } catch (error: any) {
     throw formatError(error);
   }
+}
+
+export async function runGlobal(args: {
+  projectConfig: Config.ProjectConfig;
+  globalConfig: Config.GlobalConfig;
+  moduleName: 'globalSetup' | 'globalTeardown';
+  runInBand: boolean;
+}): Promise<void> {
+  return await runGlobalHooks(args);
 }

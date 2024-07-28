@@ -898,6 +898,7 @@ export default async function normalize(
       case 'expand':
       case 'extensionsToTreatAsEsm':
       case 'globals':
+      case 'globalHooksPerWorker':
       case 'fakeTimers':
       case 'findRelatedTests':
       case 'forceCoverageMatch':

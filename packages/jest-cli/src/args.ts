@@ -291,6 +291,12 @@ export const options: {[key: string]: Options} = {
     requiresArg: true,
     type: 'string',
   },
+  globalHooksPerWorker: {
+    // TODO description
+    description: 'foo',
+    requiresArg: true,
+    type: 'boolean',
+  },
   globals: {
     description:
       'A JSON string with map of global variables that need ' +

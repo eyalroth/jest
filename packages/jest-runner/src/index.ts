@@ -21,6 +21,7 @@ import {
   type PromiseWithCustomMessage,
   Worker,
 } from 'jest-worker';
+import runGlobalHooks from './runGlobalHooks';
 import runTest from './runTest';
 import type {SerializableResolver} from './testWorker';
 import {
@@ -62,8 +63,16 @@ export default class TestRunner extends EmittingTestRunner {
 
   async #createInBandTestRun(tests: Array<Test>, watcher: TestWatcher) {
     process.env.JEST_WORKER_ID = '1';
+
+    await runGlobalHooks({
+      projectConfig: tests[0].context.config,
+      globalConfig: this._globalConfig,
+      moduleName: 'globalSetup',
+      runInBand: true,
+    });
+
     const mutex = pLimit(1);
-    return tests.reduce(
+    const result = await tests.reduce(
       (promise, test) =>
         mutex(() =>
           promise
@@ -92,6 +101,15 @@ export default class TestRunner extends EmittingTestRunner {
         ),
       Promise.resolve(),
     );
+
+    await runGlobalHooks({
+      projectConfig: tests[0].context.config,
+      globalConfig: this._globalConfig,
+      moduleName: 'globalTeardown',
+      runInBand: true,
+    });
+
+    return result;
   }
 
   async #createParallelTestRun(tests: Array<Test>, watcher: TestWatcher) {
@@ -170,6 +188,20 @@ export default class TestRunner extends EmittingTestRunner {
       });
     });
 
+    await runGlobalHooks({
+      projectConfig: tests[0].context.config,
+      globalConfig: this._globalConfig,
+      moduleName: 'globalSetup',
+      runInBand: false,
+    });
+
+    await worker.runInAllWorkers('runGlobal', {
+      projectConfig: tests[0].context.config,
+      globalConfig: this._globalConfig,
+      moduleName: 'globalSetup',
+      runInBand: false,
+    });
+
     const runAllTests = Promise.all(
       tests.map(test =>
         runTestInWorker(test).then(
@@ -181,6 +213,12 @@ export default class TestRunner extends EmittingTestRunner {
     );
 
     const cleanup = async () => {
+      await worker.runInAllWorkers('runGlobal', {
+        projectConfig: tests[0].context.config,
+        globalConfig: this._globalConfig,
+        moduleName: 'globalTeardown',
+        runInBand: false,
+      });
       const {forceExited} = await worker.end();
       if (forceExited) {
         console.error(
@@ -194,7 +232,19 @@ export default class TestRunner extends EmittingTestRunner {
       }
     };
 
-    return Promise.race([runAllTests, onInterrupt]).then(cleanup, cleanup);
+    const result = await Promise.race([runAllTests, onInterrupt]).then(
+      cleanup,
+      cleanup,
+    );
+
+    await runGlobalHooks({
+      projectConfig: tests[0].context.config,
+      globalConfig: this._globalConfig,
+      moduleName: 'globalTeardown',
+      runInBand: false,
+    });
+
+    return result;
   }
 
   on<Name extends keyof TestEvents>(
